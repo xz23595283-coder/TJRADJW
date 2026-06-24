@@ -1163,7 +1163,7 @@ function buildPromptText() {
 '解析：解析内容\n\n' +
 '## 特殊格式说明\n\n' +
 '多选题答案：答案：ABD\n\n' +
-'多空填空：\n答案：\n- 第一空答案\n- 第二空答案\n\n' +
+'多空填空（题干中每个空用____表示，有几空写几个____）：\n题干示例：第一空____，第二空____\n答案：\n- 第一空答案\n- 第二空答案\n\n' +
 '数学公式必须用 LaTeX，行内 $...$，独立公式 $$...$$\n\n' +
 '## 注意\n' +
 '- 从第二道题开始转换原题，保留所有原始信息\n' +
@@ -1519,7 +1519,11 @@ function showQuestion(index) {
   }
 
   if (q.type === 'fill') {
-    var blankCount = (q.stem.match(/____/g) || []).length;
+    var blankCount = Math.max(
+      (q.stem.match(/__{2,}/g) || []).length,
+      q.fillAnswers ? q.fillAnswers.length : 0
+    );
+    if (blankCount === 0) blankCount = 1;
     html += '<div id="fillInputs">';
     for (var i = 0; i < blankCount; i++) {
       html += '<div style="margin:12px 0;"><span>填空 ' + (i + 1) + '：</span>';
@@ -2143,14 +2147,14 @@ async function callAI(question) {
 
     if (provider === 'anthropic') {
       headers = { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
-      requestBody = { model: model, max_tokens: 1024, messages: [{ role: 'user', content: '你是一位答题专家。请用简洁、清晰、准确的方式回答以下问题（200字以内，重点突出）：\n\n' + question }] };
+      requestBody = { model: model, max_tokens: 2048, messages: [{ role: 'user', content: '你是一位答题专家。请用清晰、准确的方式回答以下问题：\n\n' + question }] };
     } else if (provider === 'gemini') {
       endpoint = endpoint + '/' + model + ':generateContent?key=' + apiKey;
       headers = { 'Content-Type': 'application/json' };
-      requestBody = { contents: [{ parts: [{ text: '你是一位答题专家。请用简洁、清晰、准确的方式回答以下问题（200字以内，重点突出）：\n\n' + question }] }] };
+      requestBody = { contents: [{ parts: [{ text: '你是一位答题专家。请用清晰、准确的方式回答以下问题：\n\n' + question }] }] };
     } else {
       headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey };
-      requestBody = { model: model, messages: [{ role: 'user', content: '你是一位答题专家。请用简洁、清晰、准确的方式回答以下问题（200字以内，重点突出）：\n\n' + question }], temperature: 0.7, max_tokens: 800 };
+      requestBody = { model: model, messages: [{ role: 'user', content: '你是一位答题专家。请用清晰、准确的方式回答以下问题：\n\n' + question }], temperature: 0.7, max_tokens: 2048 };
     }
 
     var response = await fetch(endpoint, { method: 'POST', headers: headers, body: JSON.stringify(requestBody) });
@@ -2171,7 +2175,7 @@ async function callAI(question) {
     content.innerHTML = '<div style="background:var(--bg-primary);padding:12px 16px;border-radius:10px;margin-bottom:16px;">' +
       '<strong style="font-size:12px;color:var(--text-muted);">您的问题：</strong>' +
       '<p style="margin-top:8px;">' + escapeHtml(selectedTextForAI) + '</p></div>' +
-      '<div style="line-height:1.8;">' + marked.parse(answer) + '</div>';
+      '<div style="line-height:1.8;">' + parseMarkdownWithMath(answer) + '</div>';
 
     renderMathInPage();
 
@@ -2214,14 +2218,14 @@ async function followUpAI() {
 
     if (provider === 'anthropic') {
       headers = { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
-      requestBody = { model: model, max_tokens: 1024, messages: [{ role: 'user', content: contextMsg }] };
+      requestBody = { model: model, max_tokens: 2048, messages: [{ role: 'user', content: contextMsg }] };
     } else if (provider === 'gemini') {
       endpoint = endpoint + '/' + model + ':generateContent?key=' + apiKey;
       headers = { 'Content-Type': 'application/json' };
       requestBody = { contents: [{ parts: [{ text: contextMsg }] }] };
     } else {
       headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey };
-      requestBody = { model: model, messages: [{ role: 'user', content: contextMsg }], temperature: 0.7, max_tokens: 800 };
+      requestBody = { model: model, messages: [{ role: 'user', content: contextMsg }], temperature: 0.7, max_tokens: 2048 };
     }
 
     var response = await fetch(endpoint, { method: 'POST', headers: headers, body: JSON.stringify(requestBody) });
@@ -2242,7 +2246,7 @@ async function followUpAI() {
 
     content.innerHTML += '<div style="border-top:1px dashed var(--border-color);padding-top:16px;margin-top:16px;">' +
       '<div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">📝 后续问题：' + escapeHtml(followUpText) + '</div>' +
-      '<div style="line-height:1.8;">' + marked.parse(answer) + '</div></div>';
+      '<div style="line-height:1.8;">' + parseMarkdownWithMath(answer) + '</div></div>';
 
     renderMathInPage();
     content.scrollTop = content.scrollHeight;
@@ -2523,11 +2527,24 @@ function renderMathInPage() {
     renderMathInElement(document.body, {
       delimiters: [
         { left: '$$', right: '$$', display: true },
-        { left: '$', right: '$', display: false }
+        { left: '\\[', right: '\\]', display: true },
+        { left: '$', right: '$', display: false },
+        { left: '\\(', right: '\\)', display: false }
       ],
       throwOnError: false
     });
   }
+}
+
+function parseMarkdownWithMath(text) {
+  var blocks = [];
+  function save(m) { blocks.push(m); return '\x02MATH' + (blocks.length - 1) + '\x03'; }
+  text = text.replace(/\$\$([\s\S]*?)\$\$/g, save);
+  text = text.replace(/\\\[([\s\S]*?)\\\]/g, save);
+  text = text.replace(/\$([^\$\n]{1,300}?)\$/g, save);
+  text = text.replace(/\\\(([^\)]*?)\\\)/g, save);
+  var html = marked.parse(text);
+  return html.replace(/\x02MATH(\d+)\x03/g, function(m, i) { return blocks[+i]; });
 }
 
 if (typeof marked !== 'undefined') {
